@@ -1,7 +1,9 @@
 import asyncio
+import base64
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
@@ -15,15 +17,37 @@ load_dotenv()
 API_ID = int(os.environ["TELEGRAM_API_ID"])
 API_HASH = os.environ["TELEGRAM_API_HASH"]
 
+SESSION_FILE = "digest_user.session"
+
+
+def _restore_session() -> None:
+    """Decode SESSION_BASE64 env var → digest_user.session file.
+
+    Runs at startup so Railway (which has no persistent filesystem)
+    can use a session exported from a local machine.
+    Skipped silently when the env var is absent (local dev with real file).
+    """
+    encoded = os.environ.get("SESSION_BASE64", "").strip()
+    if not encoded:
+        return
+    session_path = Path(SESSION_FILE)
+    if session_path.exists():
+        return  # already present (local dev)
+    session_bytes = base64.b64decode(encoded)
+    session_path.write_bytes(session_bytes)
+    print(f"[startup] Session restored from SESSION_BASE64 ({len(session_bytes):,} bytes)")
+
+
 client: TelegramClient | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global client
+    _restore_session()
     # Uses the user session created by auth.py (not bot token).
     # Bot tokens cannot call GetHistoryRequest for channel history.
-    client = TelegramClient("digest_user", API_ID, API_HASH)
+    client = TelegramClient(SESSION_FILE.removesuffix(".session"), API_ID, API_HASH)
     await client.start()
     yield
     await client.disconnect()

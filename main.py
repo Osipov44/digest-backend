@@ -95,31 +95,13 @@ async def _get_entity(username: str):
     return _entity_cache[username]
 
 
-_NEGATIVE_WORDS = {"война", "погиб", "погибли", "погибших", "теракт", "кризис", "авария", "угроза", "санкции", "жертв", "катастрофа", "убит", "убиты", "взрыв", "пожар", "смерть", "умер"}
-_POSITIVE_WORDS = {"победа", "рост", "достижение", "успех", "открытие", "рекорд", "победили", "выиграл", "выиграли", "прорыв", "прогресс", "развитие", "улучшение"}
-
-
-def _keyword_sentiment(text: str) -> str:
-    words = set(text.lower().split())
-    if words & _NEGATIVE_WORDS:
-        return "negative"
-    if words & _POSITIVE_WORDS:
-        return "positive"
-    return "neutral"
-
-
 async def _analyze_sentiment(cache_key: str, text: str) -> str:
     """Call DeepSeek API and return 'positive' | 'negative' | 'neutral'.
-    Falls back to keyword-based classification when API key is absent.
     Results are cached in _sentiment_cache to avoid re-analysing same posts."""
     if not text.strip():
         return "neutral"
     if cache_key in _sentiment_cache:
         return _sentiment_cache[cache_key]
-    if not DEEPSEEK_API_KEY:
-        result = _keyword_sentiment(text)
-        _sentiment_cache[cache_key] = result
-        return result
     try:
         async with httpx.AsyncClient(timeout=12.0) as client:
             resp = await client.post(

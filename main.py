@@ -5,13 +5,16 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from telethon import TelegramClient
 from telethon.errors import ChannelPrivateError, UsernameNotOccupiedError, UsernameInvalidError
 from telethon.sessions import StringSession
-from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
+from telethon.tl.types import (
+    MessageMediaPhoto, MessageMediaDocument,
+    PhotoSize, PhotoSizeProgressive,
+)
 
 load_dotenv()
 
@@ -71,7 +74,33 @@ def _media_type(message) -> str | None:
         mime = getattr(message.media.document, "mime_type", "") or ""
         if mime.startswith("image/"):
             return "photo"
+        if mime.startswith("video/"):
+            return "video"
     return None
+
+
+async def _download_full_photo(message) -> bytes:
+    """Download the largest available photo size (not a stripped preview)."""
+    buf = BytesIO()
+    if isinstance(message.media, MessageMediaPhoto):
+        photo = message.media.photo
+        # Filter to real raster sizes (exclude PhotoPathSize / PhotoStrippedSize)
+        full_sizes = [
+            s for s in photo.sizes
+            if isinstance(s, (PhotoSize, PhotoSizeProgressive))
+        ]
+        if full_sizes:
+            largest = max(
+                full_sizes,
+                key=lambda s: (s.sizes[-1] if isinstance(s, PhotoSizeProgressive) else s.size),
+            )
+            await client.download_media(message, file=buf, thumb=largest)
+        else:
+            await client.download_media(message, file=buf)
+    else:
+        await client.download_media(message, file=buf)
+    buf.seek(0)
+    return buf.read()
 
 
 def _utc_iso(dt) -> str:
@@ -191,6 +220,7 @@ async def channel_photo(username: str = Query(...)):
 
 @app.get("/media")
 async def get_media(
+    request:    Request,
     channel:    str = Query(...),
     message_id: int = Query(...),
 ):
@@ -201,6 +231,22 @@ async def get_media(
         if not message or not message.media:
             raise HTTPException(status_code=404, detail="No media")
 
+        # ── Photo: download maximum quality ──────────────────────────────────
+        if isinstance(message.media, MessageMediaPhoto):
+            data = await _download_full_photo(message)
+            if not data:
+                raise HTTPException(status_code=404, detail="Empty photo")
+            return Response(
+                data,
+                media_type="image/jpeg",
+                headers={"Cache-Control": "public, max-age=3600"},
+            )
+
+        # ── Video / Document: stream with Range support ───────────────────────
+        mime = "application/octet-stream"
+        if isinstance(message.media, MessageMediaDocument):
+            mime = getattr(message.media.document, "mime_type", mime) or mime
+
         buf = BytesIO()
         await client.download_media(message, file=buf)
         buf.seek(0)
@@ -208,15 +254,36 @@ async def get_media(
         if not data:
             raise HTTPException(status_code=404, detail="Empty media")
 
-        # Determine MIME type
-        mime = "image/jpeg"
-        if isinstance(message.media, MessageMediaDocument):
-            mime = getattr(message.media.document, "mime_type", "image/jpeg") or "image/jpeg"
+        total = len(data)
+        range_header = request.headers.get("range")
+
+        if range_header and mime.startswith("video/"):
+            # Honour browser Range requests so <video> can seek
+            range_val  = range_header.strip().replace("bytes=", "")
+            start_str, _, end_str = range_val.partition("-")
+            start = int(start_str) if start_str else 0
+            end   = int(end_str)   if end_str   else total - 1
+            end   = min(end, total - 1)
+            chunk = data[start:end + 1]
+            return Response(
+                chunk,
+                status_code=206,
+                media_type=mime,
+                headers={
+                    "Content-Range":  f"bytes {start}-{end}/{total}",
+                    "Accept-Ranges":  "bytes",
+                    "Content-Length": str(len(chunk)),
+                    "Cache-Control":  "public, max-age=3600",
+                },
+            )
 
         return Response(
             data,
             media_type=mime,
-            headers={"Cache-Control": "public, max-age=3600"},
+            headers={
+                "Accept-Ranges": "bytes",
+                "Cache-Control": "public, max-age=3600",
+            },
         )
     except HTTPException:
         raise

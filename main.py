@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 
+import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,11 +20,13 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("digest")
 
-API_ID   = int(os.environ["TELEGRAM_API_ID"])
-API_HASH = os.environ["TELEGRAM_API_HASH"]
+API_ID          = int(os.environ["TELEGRAM_API_ID"])
+API_HASH        = os.environ["TELEGRAM_API_HASH"]
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 
-_entity_cache: dict[str, object] = {}
-_photo_cache:  dict[str, bytes]  = {}
+_entity_cache:    dict[str, object] = {}
+_photo_cache:     dict[str, bytes]  = {}
+_sentiment_cache: dict[str, str]    = {}   # key: "{channel}_{msg_id}"
 
 
 # ── session ───────────────────────────────────────────────────────────────────
@@ -92,6 +95,48 @@ async def _get_entity(username: str):
     return _entity_cache[username]
 
 
+async def _analyze_sentiment(cache_key: str, text: str) -> str:
+    """Call DeepSeek API and return 'positive' | 'negative' | 'neutral'.
+    Results are cached in _sentiment_cache to avoid re-analysing same posts."""
+    if not DEEPSEEK_API_KEY or not text.strip():
+        return "neutral"
+    if cache_key in _sentiment_cache:
+        return _sentiment_cache[cache_key]
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            resp = await client.post(
+                "https://api.deepseek.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
+                json={
+                    "model": "deepseek-chat",
+                    "messages": [{
+                        "role": "user",
+                        "content": (
+                            "Определи тональность новости. "
+                            "Ответь строго одним словом: positive, negative или neutral.\n\n"
+                            f"Новость: {text[:600]}"
+                        ),
+                    }],
+                    "max_tokens": 10,
+                    "temperature": 0,
+                },
+            )
+        word = resp.json()["choices"][0]["message"]["content"].strip().lower()
+        if "positive" in word:
+            result = "positive"
+        elif "negative" in word:
+            result = "negative"
+        else:
+            result = "neutral"
+    except Exception as e:
+        log.warning(f"DeepSeek sentiment error ({cache_key}): {e}")
+        result = "neutral"
+
+    _sentiment_cache[cache_key] = result
+    log.info(f"sentiment {cache_key} → {result}")
+    return result
+
+
 async def _download_bytes(message) -> tuple[bytes, str]:
     """Download media, return (data, mime_type). Uses Telethon default
     which picks the largest photo size automatically."""
@@ -140,7 +185,17 @@ async def _fetch_channel(username: str, limit: int) -> list[dict]:
             "media_type":       mtype,
         })
 
-    return posts[:limit]
+    posts = posts[:limit]
+
+    # Analyse sentiment for all posts in parallel
+    sentiments = await asyncio.gather(*[
+        _analyze_sentiment(f"{username}_{p['id']}", p["text"])
+        for p in posts
+    ])
+    for post, sent in zip(posts, sentiments):
+        post["sentiment"] = sent
+
+    return posts
 
 
 @app.get("/posts")

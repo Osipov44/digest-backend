@@ -34,7 +34,15 @@ client: TelegramClient | None = None
 async def lifespan(app: FastAPI):
     global client
     client = TelegramClient(_make_session(), API_ID, API_HASH)
-    await client.start()
+    await client.connect()
+    if not await client.is_user_authorized():
+        await client.disconnect()
+        raise RuntimeError(
+            "Telegram session is not authorized. "
+            "Set SESSION_STRING env var or run auth.py locally first."
+        )
+    me = await client.get_me()
+    print(f"[startup] Connected as {me.first_name} (@{me.username})")
     yield
     await client.disconnect()
 

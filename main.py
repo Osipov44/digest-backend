@@ -28,17 +28,32 @@ _entity_cache:    dict[str, object] = {}
 _photo_cache:     dict[str, bytes]  = {}
 _sentiment_cache: dict[str, str]    = {}   # key: "{channel}_{msg_id}"
 
-# Substring-based: handles Russian morphology ("войны","войне" → "войн")
+# Substring roots — from perspective of Russian residents
+# negative = bad for Russia/Russians
 _NEGATIVE_ROOTS = [
-    "войн", "погиб", "убит", "убил", "жертв", "теракт", "катастроф",
-    "авари", "кризис", "взрыв", "пожар", "смерт", "умер", "арест",
-    "ранен", "атак", "обстрел", "удар", "угроз", "санкц", "трагед",
-    "гибел", "гибл", "расстрел", "захват", "похищ", "мошенник",
+    # экономика
+    "санкц", "кризис", "инфляц", "дефицит", "обвал", "банкротств",
+    "безработ", "штраф", "падени", "дефолт", "рецессий", "рецессия",
+    # происшествия внутри страны
+    "авари", "катастроф", "взрыв", "пожар", "трагед", "теракт",
+    "погиб", "убит", "жертв", "смерт", "умер", "ранен", "гибел",
+    "расстрел", "захват", "похищ", "мошенник",
+    # потери / плохие события для РФ
+    "потер", "поражен", "отступл", "капитул", "провал", "скандал",
+    "протест", "задержан", "арестован", "обвинен", "осужден",
 ]
+# positive = good for Russia/Russians
 _POSITIVE_ROOTS = [
-    "побед", "рекорд", "достижен", "успех", "открыт", "улучшен",
-    "прорыв", "прогресс", "спасен", "спас", "рост", "помощ",
-    "наград", "чемпион", "выигр", "восстановл",
+    # победы и достижения
+    "побед", "рекорд", "достижен", "успех", "прорыв", "прогресс",
+    "выигр", "чемпион", "наград", "медал",
+    # экономика и развитие
+    "рост", "увеличен", "расшир", "открыт", "запуск", "инвестиц",
+    "экспорт", "импортозамещ", "льгот", "снижен", "восстановл",
+    # дипломатия и соглашения
+    "соглашен", "договор", "союзник", "партнёр", "сотрудничеств",
+    # военные успехи РФ
+    "освобожд", "уничтожил", "перехват", "нейтрализ",
 ]
 _openrouter_sem = asyncio.Semaphore(3)
 
@@ -141,11 +156,13 @@ async def _analyze_sentiment(cache_key: str, text: str) -> str:
                         "messages": [{
                             "role": "user",
                             "content": (
-                                "Classify the sentiment of this Russian news event.\n"
-                                "Reply with exactly one word: positive, negative, or neutral.\n"
-                                "negative = tragedy, death, disaster, accident, war, threat, crime, arrest\n"
-                                "positive = success, achievement, record, victory, discovery, growth\n"
-                                "neutral = everything else\n\n"
+                                "You are classifying Russian news from the perspective of Russian residents.\n"
+                                "Reply with exactly one word: positive, negative, or neutral.\n\n"
+                                "positive: good for Russia or Russians — economic growth, military success, "
+                                "diplomatic win, achievement, record, new infrastructure, social benefits.\n"
+                                "negative: bad for Russia or Russians — sanctions, economic crisis, inflation, "
+                                "casualties, disasters, terrorism, defeat, corruption scandal, protests.\n"
+                                "neutral: international events not directly affecting Russia, neutral reports.\n\n"
                                 f"News: {text[:600]}"
                             ),
                         }],

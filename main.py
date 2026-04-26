@@ -28,6 +28,19 @@ _entity_cache:    dict[str, object] = {}
 _photo_cache:     dict[str, bytes]  = {}
 _sentiment_cache: dict[str, str]    = {}   # key: "{channel}_{msg_id}"
 
+_NEGATIVE_WORDS = {"война", "погиб", "погибли", "погибших", "теракт", "кризис", "авария", "угроза", "санкции", "жертв", "катастрофа", "убит", "убиты", "взрыв", "пожар", "смерть", "умер", "арест", "ранен", "ранены", "атака", "удар", "обстрел"}
+_POSITIVE_WORDS  = {"победа", "рост", "достижение", "успех", "открытие", "рекорд", "победили", "выиграл", "выиграли", "прорыв", "прогресс", "улучшение", "помощь", "спасен", "спасены"}
+_openrouter_sem  = asyncio.Semaphore(3)  # max 3 concurrent OpenRouter calls
+
+
+def _keyword_sentiment(text: str) -> str:
+    words = set(text.lower().split())
+    if words & _NEGATIVE_WORDS:
+        return "negative"
+    if words & _POSITIVE_WORDS:
+        return "positive"
+    return "neutral"
+
 
 # ── session ───────────────────────────────────────────────────────────────────
 
@@ -108,38 +121,42 @@ async def _analyze_sentiment(cache_key: str, text: str) -> str:
     if cache_key in _sentiment_cache:
         return _sentiment_cache[cache_key]
     try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
-            resp = await client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
-                json={
-                    "model": "deepseek/deepseek-chat:free",
-                    "messages": [{
-                        "role": "user",
-                        "content": (
-                            "Оцени характер события в новости:\n"
-                            "- negative: трагедия, смерть, катастрофа, авария, война, угроза, кризис, преступление, ущерб\n"
-                            "- positive: успех, достижение, рекорд, победа, открытие, улучшение, помощь, рост\n"
-                            "- neutral: всё остальное\n"
-                            "Ответь строго одним словом: positive, negative или neutral.\n\n"
-                            f"Новость: {text[:600]}"
-                        ),
-                    }],
-                    "max_tokens": 10,
-                    "temperature": 0,
-                },
-            )
-        word = resp.json()["choices"][0]["message"]["content"].strip().lower()
-        log.info(f"DeepSeek raw response ({cache_key}): {word!r}")
-        if "positive" in word or "позитив" in word:
+        async with _openrouter_sem:
+            async with httpx.AsyncClient(timeout=12.0) as client:
+                resp = await client.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
+                    json={
+                        "model": "deepseek/deepseek-chat:free",
+                        "messages": [{
+                            "role": "user",
+                            "content": (
+                                "Classify the sentiment of this Russian news event.\n"
+                                "Reply with exactly one word: positive, negative, or neutral.\n"
+                                "negative = tragedy, death, disaster, accident, war, threat, crime, arrest\n"
+                                "positive = success, achievement, record, victory, discovery, growth\n"
+                                "neutral = everything else\n\n"
+                                f"News: {text[:600]}"
+                            ),
+                        }],
+                        "max_tokens": 10,
+                        "temperature": 0,
+                    },
+                )
+        data = resp.json()
+        if "choices" not in data:
+            raise ValueError(data.get("error", data))
+        word = data["choices"][0]["message"]["content"].strip().lower()
+        log.info(f"OpenRouter response ({cache_key}): {word!r}")
+        if "positive" in word:
             result = "positive"
-        elif "negative" in word or "негатив" in word:
+        elif "negative" in word:
             result = "negative"
         else:
             result = "neutral"
     except Exception as e:
-        log.warning(f"DeepSeek sentiment error ({cache_key}): {e}")
-        result = "neutral"
+        log.warning(f"OpenRouter error ({cache_key}): {e} — using keywords")
+        result = _keyword_sentiment(text)
 
     _sentiment_cache[cache_key] = result
     log.info(f"sentiment {cache_key} → {result}")

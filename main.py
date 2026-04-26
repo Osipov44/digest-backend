@@ -130,9 +130,10 @@ async def _analyze_sentiment(cache_key: str, text: str) -> str:
                 },
             )
         word = resp.json()["choices"][0]["message"]["content"].strip().lower()
-        if "positive" in word:
+        log.info(f"DeepSeek raw response ({cache_key}): {word!r}")
+        if "positive" in word or "позитив" in word:
             result = "positive"
-        elif "negative" in word:
+        elif "negative" in word or "негатив" in word:
             result = "negative"
         else:
             result = "neutral"

@@ -22,7 +22,7 @@ log = logging.getLogger("digest")
 
 API_ID          = int(os.environ["TELEGRAM_API_ID"])
 API_HASH        = os.environ["TELEGRAM_API_HASH"]
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 
 _entity_cache:    dict[str, object] = {}
 _photo_cache:     dict[str, bytes]  = {}
@@ -71,7 +71,7 @@ app.add_middleware(
 
 @app.get("/health")
 async def health():
-    return {"deepseek_key_set": bool(DEEPSEEK_API_KEY), "key_prefix": DEEPSEEK_API_KEY[:8] + "..." if DEEPSEEK_API_KEY else ""}
+    return {"openrouter_key_set": bool(OPENROUTER_API_KEY), "key_prefix": OPENROUTER_API_KEY[:8] + "..." if OPENROUTER_API_KEY else ""}
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -101,7 +101,7 @@ async def _get_entity(username: str):
 
 
 async def _analyze_sentiment(cache_key: str, text: str) -> str:
-    """Call DeepSeek API and return 'positive' | 'negative' | 'neutral'.
+    """Call OpenRouter API and return 'positive' | 'negative' | 'neutral'.
     Results are cached in _sentiment_cache to avoid re-analysing same posts."""
     if not text.strip():
         return "neutral"
@@ -110,10 +110,10 @@ async def _analyze_sentiment(cache_key: str, text: str) -> str:
     try:
         async with httpx.AsyncClient(timeout=12.0) as client:
             resp = await client.post(
-                "https://api.deepseek.com/v1/chat/completions",
-                headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
                 json={
-                    "model": "deepseek-chat",
+                    "model": "deepseek/deepseek-chat:free",
                     "messages": [{
                         "role": "user",
                         "content": (

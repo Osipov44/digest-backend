@@ -152,7 +152,7 @@ async def _analyze_sentiment(cache_key: str, text: str) -> str:
                     "https://openrouter.ai/api/v1/chat/completions",
                     headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
                     json={
-                        "model": "deepseek/deepseek-r1:free",
+                        "model": "openai/gpt-oss-120b:free",
                         "messages": [{
                             "role": "user",
                             "content": (

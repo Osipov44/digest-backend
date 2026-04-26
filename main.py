@@ -69,6 +69,11 @@ app.add_middleware(
 )
 
 
+@app.get("/health")
+async def health():
+    return {"deepseek_key_set": bool(DEEPSEEK_API_KEY), "key_prefix": DEEPSEEK_API_KEY[:8] + "..." if DEEPSEEK_API_KEY else ""}
+
+
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _media_type(msg) -> str | None:

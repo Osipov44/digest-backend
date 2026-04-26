@@ -28,16 +28,26 @@ _entity_cache:    dict[str, object] = {}
 _photo_cache:     dict[str, bytes]  = {}
 _sentiment_cache: dict[str, str]    = {}   # key: "{channel}_{msg_id}"
 
-_NEGATIVE_WORDS = {"война", "погиб", "погибли", "погибших", "теракт", "кризис", "авария", "угроза", "санкции", "жертв", "катастрофа", "убит", "убиты", "взрыв", "пожар", "смерть", "умер", "арест", "ранен", "ранены", "атака", "удар", "обстрел"}
-_POSITIVE_WORDS  = {"победа", "рост", "достижение", "успех", "открытие", "рекорд", "победили", "выиграл", "выиграли", "прорыв", "прогресс", "улучшение", "помощь", "спасен", "спасены"}
-_openrouter_sem  = asyncio.Semaphore(3)  # max 3 concurrent OpenRouter calls
+# Substring-based: handles Russian morphology ("войны","войне" → "войн")
+_NEGATIVE_ROOTS = [
+    "войн", "погиб", "убит", "убил", "жертв", "теракт", "катастроф",
+    "авари", "кризис", "взрыв", "пожар", "смерт", "умер", "арест",
+    "ранен", "атак", "обстрел", "удар", "угроз", "санкц", "трагед",
+    "гибел", "гибл", "расстрел", "захват", "похищ", "мошенник",
+]
+_POSITIVE_ROOTS = [
+    "побед", "рекорд", "достижен", "успех", "открыт", "улучшен",
+    "прорыв", "прогресс", "спасен", "спас", "рост", "помощ",
+    "наград", "чемпион", "выигр", "восстановл",
+]
+_openrouter_sem = asyncio.Semaphore(3)
 
 
 def _keyword_sentiment(text: str) -> str:
-    words = set(text.lower().split())
-    if words & _NEGATIVE_WORDS:
+    lower = text.lower()
+    if any(root in lower for root in _NEGATIVE_ROOTS):
         return "negative"
-    if words & _POSITIVE_WORDS:
+    if any(root in lower for root in _POSITIVE_ROOTS):
         return "positive"
     return "neutral"
 
@@ -127,7 +137,7 @@ async def _analyze_sentiment(cache_key: str, text: str) -> str:
                     "https://openrouter.ai/api/v1/chat/completions",
                     headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
                     json={
-                        "model": "deepseek/deepseek-chat:free",
+                        "model": "deepseek/deepseek-r1:free",
                         "messages": [{
                             "role": "user",
                             "content": (
